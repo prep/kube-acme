@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"log"
 	"log/slog"
 	"net/http"
 	"os"
@@ -15,7 +14,7 @@ import (
 	"github.com/prep/kubeacme"
 )
 
-const (
+var (
 	Revision   string = "unknown"
 	CommitHash string = "unknown"
 )
@@ -34,18 +33,21 @@ func getEnvList(env string) []string {
 	})
 }
 
-// shutdownFunc calls fn whenever this process gets the signal to shut down.
-func shutdownFunc(fn func()) {
+func signalHandler(fn func(os.Signal)) {
 	sigC := make(chan os.Signal, 1)
-	signal.Notify(sigC, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigC, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGUSR1, syscall.SIGUSR2)
 
 	go func() {
-		<-sigC
-		fn()
+		for {
+			fn(<-sigC)
+		}
 	}()
 }
 
 func main() {
+	ctx := context.Background()
+
+	// Set up logging.
 	slog.SetDefault(newLogger(
 		slog.Group("app",
 			slog.String("name", "kubeacme"),
@@ -54,6 +56,8 @@ func main() {
 		),
 	))
 
+	// Set up the kubeacme agent, which will handle the ACME challenges and
+	// store the TLS certificate in a Kubernetes secret.
 	agent, err := kubeacme.New(kubeacme.Config{
 		Domains:                   getEnvList("KUBEACME_DOMAINS"),
 		EmailAddress:              getEnv("KUBEACME_EMAIL", ""),
@@ -63,7 +67,8 @@ func main() {
 		SecretAccountKeyNamespace: getEnv("KUBEACME_ACCOUNT_KEY_NAMESPACE", "kubeacme"),
 	})
 	if err != nil {
-		log.Fatalf("Unable to create kubeacme client: %s", err)
+		slog.ErrorContext(ctx, "Unable to create kubeacme agent", "error", err)
+		os.Exit(1)
 	}
 
 	// Set up an HTTP handler.
@@ -74,21 +79,36 @@ func main() {
 		ReadHeaderTimeout: 2 * time.Second,
 	}
 
-	// Clean shutdown.
-	shutdownFunc(func() {
-		log.Printf("Shutting down service")
-		_ = server.Shutdown(context.Background())
+	// Handle signals.
+	signalHandler(func(sig os.Signal) {
+		switch sig {
+		// Handle a clean shutdown.
+		case syscall.SIGINT, syscall.SIGTERM:
+			slog.InfoContext(ctx, "Shutting down service")
+			_ = server.Shutdown(ctx)
+
+		// Update the certificate.
+		case syscall.SIGHUP, syscall.SIGUSR1, syscall.SIGUSR2:
+			slog.InfoContext(ctx, "Requesting certificate update")
+
+			if err := agent.Request(ctx); err != nil {
+				slog.ErrorContext(ctx, "Unable to request certificate update", "error", err)
+			} else {
+				slog.InfoContext(ctx, "Certificate update finished")
+			}
+		}
 	})
 
 	// Spin up the HTTP server.
-	log.Printf("Listening on port %s", server.Addr)
+	slog.InfoContext(ctx, "Starting service", "port", server.Addr)
 
 	err = server.ListenAndServe()
 	switch {
 	case errors.Is(err, http.ErrServerClosed):
 	case err != nil:
-		log.Fatalf("ListenAndServe: %s", err)
+		slog.ErrorContext(ctx, "Unable to http.ListenAndServe", "error", err)
+		os.Exit(1)
 	}
 
-	log.Printf("Service shut down")
+	slog.InfoContext(ctx, "Stopping service")
 }
