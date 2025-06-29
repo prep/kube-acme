@@ -3,7 +3,10 @@ package kubeacme
 import "errors"
 
 type Config struct {
-	Domains      []string
+	// Domains is a list of domains for which to obtain TLS certificates.
+	Domains []string
+
+	// EmailAddress is the email address to use for ACME account registration.
 	EmailAddress string
 
 	// ServiceName and ServiceNamespace refer to the k8s service whose annotations

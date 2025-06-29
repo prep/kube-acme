@@ -7,6 +7,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -20,6 +21,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
@@ -30,6 +32,8 @@ const (
 	ChallengePath   = ChallengePrefix + "{token}"
 )
 
+// Agent is an ACME client that can be hooked in quite easily into an net/http
+// server.
 type Agent struct {
 	client    *kubernetes.Clientset
 	config    Config
@@ -115,7 +119,7 @@ func (a *Agent) storeCert(ctx context.Context, certPEM, keyPEM []byte) (string, 
 
 const ecsdsaPrivateKey = "ecdsa.key"
 
-// storeAccountKey generates and stores an ACME account key.
+// storeAccountKey stores an ACME account key.
 func (a *Agent) storeAccountKey(ctx context.Context, key *ecdsa.PrivateKey) error {
 	data, err := x509.MarshalECPrivateKey(key)
 	if err != nil {
@@ -138,9 +142,11 @@ func (a *Agent) storeAccountKey(ctx context.Context, key *ecdsa.PrivateKey) erro
 
 var errAccountKeyNotFound = errors.New("account key not found")
 
+// getAccountKey retrieves the ACME account key.
 func (a *Agent) getAccountKey(ctx context.Context) (*ecdsa.PrivateKey, error) {
 	secrets := a.client.CoreV1().Secrets(a.config.SecretAccountKeyNamespace)
 
+	// Get the secret containing the account key.
 	secret, err := secrets.Get(ctx, a.config.SecretAccountKeyName, metav1.GetOptions{})
 	switch {
 	case apierrors.IsNotFound(err):
@@ -149,11 +155,13 @@ func (a *Agent) getAccountKey(ctx context.Context) (*ecdsa.PrivateKey, error) {
 		return nil, err
 	}
 
+	// Verify that the private key is present in the secret.
 	data, ok := secret.Data[ecsdsaPrivateKey]
 	if !ok {
 		return nil, fmt.Errorf("%s: missing account key secret", a.config.SecretAccountKeyName)
 	}
 
+	// Parse the private key from the secret data.
 	key, err := x509.ParseECPrivateKey(data)
 	if err != nil {
 		return nil, err
@@ -165,39 +173,39 @@ func (a *Agent) getAccountKey(ctx context.Context) (*ecdsa.PrivateKey, error) {
 const annotationKey = "service.beta.kubernetes.io/oci-load-balancer-tls-secret"
 
 func (a *Agent) updateService(ctx context.Context, value string) error {
-	service := a.client.CoreV1().Services(a.config.ServiceNamespace)
-
-	// Fetch the service.
-	svc, err := service.Get(ctx, a.config.ServiceName, metav1.GetOptions{})
+	// Construct the JSON payload of the patch.
+	patch, err := json.Marshal(&corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Annotations: map[string]string{
+				annotationKey: value,
+			},
+		},
+	})
 	if err != nil {
 		return err
 	}
 
-	// Update the service annotations.
-	if svc.ObjectMeta.Annotations == nil {
-		svc.ObjectMeta.Annotations = make(map[string]string)
-	}
-
 	slog.InfoContext(ctx, "Updating service annotation",
-		slog.String("old", svc.ObjectMeta.Annotations[annotationKey]),
-		slog.String("new", value),
+		slog.String("key", annotationKey),
+		slog.String("value", value),
 		slog.Group("k8s",
 			slog.String("name", a.config.ServiceName),
 			slog.String("namespace", a.config.ServiceNamespace),
 		))
 
-	svc.ObjectMeta.Annotations[annotationKey] = value
-
-	// Update the service.
-	_, err = service.Update(ctx, svc, metav1.UpdateOptions{})
+	// Patch the service with the new annotation.
+	_, err = a.client.CoreV1().Services(a.config.ServiceNamespace).
+		Patch(ctx, a.config.ServiceName, types.MergePatchType, patch, metav1.PatchOptions{})
 	return err
 }
 
 // HandleHTTP01Challenge serves the ACME HTTP-01 challenge response.
 func (a *Agent) HandleHTTP01Challenge(w http.ResponseWriter, r *http.Request) {
-	// Extract the token. Use strings.TrimPrefix instead of r.PathValue because
-	// this approach makes it compatible when the implementer doesn't use a router
-	// that supports path variables.
+	// Extract the token.
+	//
+	// Use strings.TrimPrefix instead of r.PathValue because this approach makes
+	// it compatible when the implementer doesn't use a router that supports path
+	// variables.
 	token := strings.TrimPrefix(r.URL.Path, ChallengePrefix)
 
 	a.mu.Lock()
@@ -235,6 +243,8 @@ func (a *Agent) Request(ctx context.Context) (string, error) {
 			return "", fmt.Errorf("storeAccountKey: %w", err)
 		}
 
+		// Set the register flag to true, so we can register the account with ACME
+		// as the first operation that is done after creating the ACME client.
 		register = true
 
 	case err != nil:
@@ -255,6 +265,7 @@ func (a *Agent) Request(ctx context.Context) (string, error) {
 			},
 		}
 
+		// Register the account with the ACME server.
 		_, err = client.Register(ctx, account, acme.AcceptTOS)
 		switch {
 		case errors.Is(err, acme.ErrAccountAlreadyExists):
@@ -263,6 +274,7 @@ func (a *Agent) Request(ctx context.Context) (string, error) {
 		}
 	}
 
+	// Create an order for the domains.
 	order, err := client.AuthorizeOrder(ctx, acme.DomainIDs(a.config.Domains...))
 	if err != nil {
 		return "", fmt.Errorf("acme.AuthorizeOrder: %w", err)
