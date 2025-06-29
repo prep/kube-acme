@@ -37,12 +37,12 @@ func (h *Handler) health(w http.ResponseWriter, _ *http.Request) {
 // renew handles the renewal of the certificate by requesting a new ACME
 // challenge.
 func (h *Handler) renew(w http.ResponseWriter, r *http.Request) {
-	err := h.agent.Request(r.Context())
+	name, err := h.agent.Request(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("ok"))
+	_, _ = w.Write([]byte(`{"name":"` + name + `"}`))
 }

@@ -69,16 +69,22 @@ func main() {
 		return
 	}
 
-	// Set up the kubeacme agent, which will handle the ACME challenges and
-	// store the TLS certificate in a Kubernetes secret.
-	agent, err := kubeacme.New(kubeacme.Config{
-		Domains:                   getEnvList("KUBEACME_DOMAINS"),
-		EmailAddress:              getEnv("KUBEACME_EMAIL", ""),
-		SecretCertName:            getEnv("KUBEACME_CERT_NAME", "ssl-certificate-secret"),
-		SecretCertNamespace:       getEnv("KUBEACME_CERT_NAMESPACE", "nginx"),
+	config := kubeacme.Config{
+		Domains:      getEnvList("KUBEACME_DOMAINS"),
+		EmailAddress: getEnv("KUBEACME_EMAIL", ""),
+
+		SecretCertNamePrefix: getEnv("KUBEACME_CERT_NAMEPREFIX", "ssl-cert"),
+		SecretCertNamespace:  getEnv("KUBEACME_CERT_NAMESPACE", "nginx"),
+		ServiceName:          getEnv("KUBEACME_SERVICE_NAME", "ingress"),
+		ServiceNamespace:     getEnv("KUBEACME_SERVICE_NAMESPACE", "nginx"),
+
 		SecretAccountKeyName:      getEnv("KUBEACME_ACCOUNT_KEY_NAME", "account-key"),
 		SecretAccountKeyNamespace: getEnv("KUBEACME_ACCOUNT_KEY_NAMESPACE", "kubeacme"),
-	})
+	}
+
+	// Set up the kubeacme agent, which will handle the ACME challenges and
+	// store the TLS certificate in a Kubernetes secret.
+	agent, err := kubeacme.New(config)
 	if err != nil {
 		slog.ErrorContext(ctx, "Unable to create kubeacme agent", "error", err)
 		os.Exit(1)
@@ -104,11 +110,17 @@ func main() {
 		case syscall.SIGHUP, syscall.SIGUSR1, syscall.SIGUSR2:
 			slog.InfoContext(ctx, "Requesting certificate update")
 
-			if err := agent.Request(ctx); err != nil {
+			name, err := agent.Request(ctx)
+			if err != nil {
 				slog.ErrorContext(ctx, "Unable to request certificate update", "error", err)
-			} else {
-				slog.InfoContext(ctx, "Certificate update finished")
+				return
 			}
+
+			slog.InfoContext(ctx, "Certificate update finished",
+				slog.Group("k8s",
+					slog.String("name", name),
+					slog.String("namespace", config.SecretCertNamespace),
+				))
 		}
 	})
 

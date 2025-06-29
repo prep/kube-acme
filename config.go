@@ -6,10 +6,16 @@ type Config struct {
 	Domains      []string
 	EmailAddress string
 
-	// SecretCertName and SecretCertNamespace define the name and namespace of
-	// the kubernetes secret to store the TLS certificate and private key.
-	SecretCertName      string
-	SecretCertNamespace string
+	// ServiceName and ServiceNamespace refer to the k8s service whose annotations
+	// need updating after a new certificate secret has been stored.
+	ServiceName      string
+	ServiceNamespace string
+
+	// SecretCertNamePrefix and SecretCertNamespace define the name prefix and
+	// namespace of the kubernetes secret to store the TLS certificate and
+	// private key.
+	SecretCertNamePrefix string
+	SecretCertNamespace  string
 
 	// SecretAccountKeyName and SecretAccountKeyNamespace define the name and
 	// namespace of the kubernetes secret where the ACME account key is stored.
@@ -23,7 +29,7 @@ func (c Config) validate() error {
 		return errors.New("no domains specified")
 	case c.EmailAddress == "":
 		return errors.New("no email address specified")
-	case c.SecretCertName == "":
+	case c.SecretCertNamePrefix == "":
 		return errors.New("no secret cert name specified")
 	case c.SecretCertNamespace == "":
 		return errors.New("no secret cert namespace specified")

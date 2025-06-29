@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/crypto/acme"
 	corev1 "k8s.io/api/core/v1"
@@ -87,12 +88,16 @@ func (a *Agent) storeSecret(ctx context.Context, secret *corev1.Secret) error {
 	return nil
 }
 
+const timeFormat = "20060102"
+
 // storeCert stores the certificate and private key in a Kubernetes secret.
-func (a *Agent) storeCert(ctx context.Context, certPEM, keyPEM []byte) error {
+func (a *Agent) storeCert(ctx context.Context, certPEM, keyPEM []byte) (string, error) {
+	name := a.config.SecretCertNamePrefix + "-" + time.Now().Format(timeFormat)
+
 	secret := &corev1.Secret{
 		Type: corev1.SecretTypeTLS,
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      a.config.SecretCertName,
+			Name:      name,
 			Namespace: a.config.SecretCertNamespace,
 		},
 		Data: map[string][]byte{
@@ -101,7 +106,11 @@ func (a *Agent) storeCert(ctx context.Context, certPEM, keyPEM []byte) error {
 		},
 	}
 
-	return a.storeSecret(ctx, secret)
+	if err := a.storeSecret(ctx, secret); err != nil {
+		return "", err
+	}
+
+	return name, nil
 }
 
 const ecsdsaPrivateKey = "ecdsa.key"
@@ -153,6 +162,37 @@ func (a *Agent) getAccountKey(ctx context.Context) (*ecdsa.PrivateKey, error) {
 	return key, nil
 }
 
+const annotationKey = "service.beta.kubernetes.io/oci-load-balancer-tls-secret"
+
+func (a *Agent) updateService(ctx context.Context, value string) error {
+	service := a.client.CoreV1().Services(a.config.ServiceNamespace)
+
+	// Fetch the service.
+	svc, err := service.Get(ctx, a.config.ServiceName, metav1.GetOptions{})
+	if err != nil {
+		return err
+	}
+
+	// Update the service annotations.
+	if svc.ObjectMeta.Annotations == nil {
+		svc.ObjectMeta.Annotations = make(map[string]string)
+	}
+
+	slog.InfoContext(ctx, "Updating service annotation",
+		slog.String("old", svc.ObjectMeta.Annotations[annotationKey]),
+		slog.String("new", value),
+		slog.Group("k8s",
+			slog.String("name", a.config.ServiceName),
+			slog.String("namespace", a.config.ServiceNamespace),
+		))
+
+	svc.ObjectMeta.Annotations[annotationKey] = value
+
+	// Update the service.
+	_, err = service.Update(ctx, svc, metav1.UpdateOptions{})
+	return err
+}
+
 // HandleHTTP01Challenge serves the ACME HTTP-01 challenge response.
 func (a *Agent) HandleHTTP01Challenge(w http.ResponseWriter, r *http.Request) {
 	// Extract the token. Use strings.TrimPrefix instead of r.PathValue because
@@ -177,7 +217,7 @@ func (a *Agent) HandleHTTP01Challenge(w http.ResponseWriter, r *http.Request) {
 }
 
 // Request an ACME HTTP-01 challenge.
-func (a *Agent) Request(ctx context.Context) error {
+func (a *Agent) Request(ctx context.Context) (string, error) {
 	var register bool
 
 	// Fetch the account key from the Kubernetes secret.
@@ -187,18 +227,18 @@ func (a *Agent) Request(ctx context.Context) error {
 	case errors.Is(err, errAccountKeyNotFound):
 		accountKey, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		if err != nil {
-			return err
+			return "", err
 		}
 
 		// Store the account key in a Kubernetes secret.
 		if err = a.storeAccountKey(ctx, accountKey); err != nil {
-			return fmt.Errorf("storeAccountKey: %w", err)
+			return "", fmt.Errorf("storeAccountKey: %w", err)
 		}
 
 		register = true
 
 	case err != nil:
-		return fmt.Errorf("getAccountKey: %w", err)
+		return "", fmt.Errorf("getAccountKey: %w", err)
 	}
 
 	// Create the ACME client and account.
@@ -219,13 +259,13 @@ func (a *Agent) Request(ctx context.Context) error {
 		switch {
 		case errors.Is(err, acme.ErrAccountAlreadyExists):
 		case err != nil:
-			return fmt.Errorf("acme.Register: %w", err)
+			return "", fmt.Errorf("acme.Register: %w", err)
 		}
 	}
 
 	order, err := client.AuthorizeOrder(ctx, acme.DomainIDs(a.config.Domains...))
 	if err != nil {
-		return fmt.Errorf("acme.AuthorizeOrder: %w", err)
+		return "", fmt.Errorf("acme.AuthorizeOrder: %w", err)
 	}
 
 	// Process all challenges for all authorizations.
@@ -234,7 +274,7 @@ func (a *Agent) Request(ctx context.Context) error {
 	for _, url := range order.AuthzURLs {
 		authz, err := client.GetAuthorization(ctx, url)
 		if err != nil {
-			return fmt.Errorf("acme.GetAuthorization: %w", err)
+			return "", fmt.Errorf("acme.GetAuthorization: %w", err)
 		}
 
 		// Find the HTTP-01 challenge for this authorization
@@ -247,7 +287,7 @@ func (a *Agent) Request(ctx context.Context) error {
 		}
 
 		if challenge == nil {
-			return fmt.Errorf("no http-01 challenge found for authorization %s", url)
+			return "", fmt.Errorf("no http-01 challenge found for authorization %s", url)
 		}
 
 		challenges = append(challenges, challenge)
@@ -255,7 +295,7 @@ func (a *Agent) Request(ctx context.Context) error {
 	}
 
 	if len(challenges) == 0 {
-		return fmt.Errorf("no http-01 challenges found")
+		return "", fmt.Errorf("no http-01 challenges found")
 	}
 
 	// Prepare all challenge responses.
@@ -264,7 +304,7 @@ func (a *Agent) Request(ctx context.Context) error {
 		keyAuth, err := client.HTTP01ChallengeResponse(challenge.Token)
 		if err != nil {
 			a.mu.Unlock()
-			return fmt.Errorf("acme.HTTP01ChallengeResponse: %w", err)
+			return "", fmt.Errorf("acme.HTTP01ChallengeResponse: %w", err)
 		}
 
 		a.challenge[challenge.Token] = keyAuth
@@ -285,7 +325,7 @@ func (a *Agent) Request(ctx context.Context) error {
 	for _, challenge := range challenges {
 		_, err = client.Accept(ctx, challenge)
 		if err != nil {
-			return fmt.Errorf("acme.Accept: %s: %w", challenge.Token, err)
+			return "", fmt.Errorf("acme.Accept: %s: %w", challenge.Token, err)
 		}
 	}
 
@@ -293,19 +333,19 @@ func (a *Agent) Request(ctx context.Context) error {
 	for _, url := range authzURLs {
 		_, err = client.WaitAuthorization(ctx, url)
 		if err != nil {
-			return fmt.Errorf("acme.WaitAuthorization: %s: %w", url, err)
+			return "", fmt.Errorf("acme.WaitAuthorization: %s: %w", url, err)
 		}
 	}
 
 	// Wait for the order to be ready.
 	_, err = client.WaitOrder(ctx, order.URI)
 	if err != nil {
-		return fmt.Errorf("acme.WaitOrder: %w", err)
+		return "", fmt.Errorf("acme.WaitOrder: %w", err)
 	}
 
 	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		return fmt.Errorf("ecdsa.GenerateKey: %w", err)
+		return "", fmt.Errorf("ecdsa.GenerateKey: %w", err)
 	}
 
 	// Create a certificate request.
@@ -316,19 +356,19 @@ func (a *Agent) Request(ctx context.Context) error {
 
 	csr, err := x509.CreateCertificateRequest(rand.Reader, certReq, privateKey)
 	if err != nil {
-		return fmt.Errorf("x509.CreateCertificateRequest: %w", err)
+		return "", fmt.Errorf("x509.CreateCertificateRequest: %w", err)
 	}
 
 	// Parse the CSR to check for errors.
 	_, err = x509.ParseCertificateRequest(csr)
 	if err != nil {
-		return fmt.Errorf("x509.ParseCertificateRequest: %w", err)
+		return "", fmt.Errorf("x509.ParseCertificateRequest: %w", err)
 	}
 
 	// Submit the CSR.
 	ders, _, err := client.CreateOrderCert(ctx, order.FinalizeURL, csr, true)
 	if err != nil {
-		return fmt.Errorf("acme.CreateOrderCert: %w", err)
+		return "", fmt.Errorf("acme.CreateOrderCert: %w", err)
 	}
 
 	// Create the certificate PEM. Include the entire chain.
@@ -339,14 +379,14 @@ func (a *Agent) Request(ctx context.Context) error {
 			Bytes: der,
 		})
 		if err != nil {
-			return fmt.Errorf("pem.Encode: %w", err)
+			return "", fmt.Errorf("pem.Encode: %w", err)
 		}
 	}
 
 	// Create the private key PEM.
 	privateKeyBytes, err := x509.MarshalECPrivateKey(privateKey)
 	if err != nil {
-		return fmt.Errorf("x509.MarshalECPrivateKey: %w", err)
+		return "", fmt.Errorf("x509.MarshalECPrivateKey: %w", err)
 	}
 
 	keyPEM := pem.EncodeToMemory(&pem.Block{
@@ -355,9 +395,15 @@ func (a *Agent) Request(ctx context.Context) error {
 	})
 
 	// Store the certificate and private key in a Kubernetes secret.
-	if err = a.storeCert(ctx, []byte(certPEM.String()), keyPEM); err != nil {
-		return fmt.Errorf("storeCert: %w", err)
+	name, err := a.storeCert(ctx, []byte(certPEM.String()), keyPEM)
+	if err != nil {
+		return "", fmt.Errorf("storeCert: %w", err)
 	}
 
-	return nil
+	// Update the service with a reference to the new TLS certificate secret.
+	if err = a.updateService(ctx, name); err != nil {
+		return "", fmt.Errorf("updateService: %w", err)
+	}
+
+	return name, nil
 }
