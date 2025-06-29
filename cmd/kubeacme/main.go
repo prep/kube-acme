@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -12,6 +13,11 @@ import (
 	"time"
 
 	"github.com/prep/kubeacme"
+)
+
+const (
+	Revision   string = "unknown"
+	CommitHash string = "unknown"
 )
 
 func getEnv(env, defaultValue string) string {
@@ -40,6 +46,14 @@ func shutdownFunc(fn func()) {
 }
 
 func main() {
+	slog.SetDefault(newLogger(
+		slog.Group("app",
+			slog.String("name", "kubeacme"),
+			slog.String("revision", Revision),
+			slog.String("commit", CommitHash),
+		),
+	))
+
 	agent, err := kubeacme.New(kubeacme.Config{
 		Domains:                   getEnvList("KUBEACME_DOMAINS"),
 		EmailAddress:              getEnv("KUBEACME_EMAIL", ""),

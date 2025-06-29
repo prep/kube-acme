@@ -1,3 +1,4 @@
+// Package kubeacme provides an ACME client that stores certificates and account keys in Kubernetes secrets.
 package kubeacme
 
 import (
@@ -9,6 +10,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -71,7 +73,16 @@ func (a *Agent) storeSecret(ctx context.Context, secret *corev1.Secret) error {
 		_, err = secrets.Update(ctx, secret, metav1.UpdateOptions{})
 	}
 
-	return err
+	if err != nil {
+		slog.ErrorContext(ctx, "Unable to store ACME secret",
+			slog.Group("k8s",
+				slog.String("namespace", secret.ObjectMeta.Namespace),
+				slog.String("name", secret.ObjectMeta.Name),
+			))
+		return err
+	}
+
+	return nil
 }
 
 // storeCert stores the certificate and private key in a Kubernetes secret.
@@ -142,16 +153,22 @@ func (a *Agent) getAccountKey(ctx context.Context) (*ecdsa.PrivateKey, error) {
 
 // HandleHTTP01Challenge serves the ACME HTTP-01 challenge response.
 func (a *Agent) HandleHTTP01Challenge(w http.ResponseWriter, r *http.Request) {
-	token := r.PathValue("token")
+	// Extract the token. Use strings.TrimPrefix instead of r.PathValue because
+	// this approach makes it compatible when the implementer doesn't use a router
+	// that supports path variables.
+	token := strings.TrimPrefix(r.URL.Path, ChallengePrefix)
 
 	a.mu.Lock()
 	resp, ok := a.challenge[token]
 	a.mu.Unlock()
 
 	if !ok {
+		slog.ErrorContext(r.Context(), "ACME challenge NOT found")
 		http.Error(w, "Invalid challenge", http.StatusNotFound)
 		return
 	}
+
+	slog.InfoContext(r.Context(), "ACME challenge found")
 
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(resp))
@@ -200,13 +217,13 @@ func (a *Agent) Request(ctx context.Context) error {
 		switch {
 		case errors.Is(err, acme.ErrAccountAlreadyExists):
 		case err != nil:
-			return fmt.Errorf("Register: %w", err)
+			return fmt.Errorf("acme.Register: %w", err)
 		}
 	}
 
 	order, err := client.AuthorizeOrder(ctx, acme.DomainIDs(a.config.Domains...))
 	if err != nil {
-		return fmt.Errorf("AuthorizeOrder: %w", err)
+		return fmt.Errorf("acme.AuthorizeOrder: %w", err)
 	}
 
 	// Process all challenges for all authorizations.
@@ -215,7 +232,7 @@ func (a *Agent) Request(ctx context.Context) error {
 	for _, url := range order.AuthzURLs {
 		authz, err := client.GetAuthorization(ctx, url)
 		if err != nil {
-			return fmt.Errorf("GetAuthorization: %w", err)
+			return fmt.Errorf("acme.GetAuthorization: %w", err)
 		}
 
 		// Find the HTTP-01 challenge for this authorization
@@ -245,7 +262,7 @@ func (a *Agent) Request(ctx context.Context) error {
 		keyAuth, err := client.HTTP01ChallengeResponse(challenge.Token)
 		if err != nil {
 			a.mu.Unlock()
-			return fmt.Errorf("HTTP01ChallengeResponse: %w", err)
+			return fmt.Errorf("acme.HTTP01ChallengeResponse: %w", err)
 		}
 
 		a.challenge[challenge.Token] = keyAuth
@@ -266,7 +283,7 @@ func (a *Agent) Request(ctx context.Context) error {
 	for _, challenge := range challenges {
 		_, err = client.Accept(ctx, challenge)
 		if err != nil {
-			return fmt.Errorf("Accept: %s: %w", challenge.Token, err)
+			return fmt.Errorf("acme.Accept: %s: %w", challenge.Token, err)
 		}
 	}
 
@@ -274,14 +291,14 @@ func (a *Agent) Request(ctx context.Context) error {
 	for _, url := range authzURLs {
 		_, err = client.WaitAuthorization(ctx, url)
 		if err != nil {
-			return fmt.Errorf("WaitAuthorization: %s: %w", url, err)
+			return fmt.Errorf("acme.WaitAuthorization: %s: %w", url, err)
 		}
 	}
 
 	// Wait for the order to be ready.
 	_, err = client.WaitOrder(ctx, order.URI)
 	if err != nil {
-		return fmt.Errorf("WaitOrder: %w", err)
+		return fmt.Errorf("acme.WaitOrder: %w", err)
 	}
 
 	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -309,7 +326,7 @@ func (a *Agent) Request(ctx context.Context) error {
 	// Submit the CSR.
 	ders, _, err := client.CreateOrderCert(ctx, order.FinalizeURL, csr, true)
 	if err != nil {
-		return fmt.Errorf("CreateOrderCert: %w", err)
+		return fmt.Errorf("acme.CreateOrderCert: %w", err)
 	}
 
 	// Create the certificate PEM. Include the entire chain.
