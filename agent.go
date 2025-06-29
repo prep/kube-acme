@@ -73,15 +73,17 @@ func (a *Agent) storeSecret(ctx context.Context, secret *corev1.Secret) error {
 		_, err = secrets.Update(ctx, secret, metav1.UpdateOptions{})
 	}
 
+	attrs := slog.Group("k8s",
+		slog.String("namespace", secret.ObjectMeta.Namespace),
+		slog.String("name", secret.ObjectMeta.Name),
+	)
+
 	if err != nil {
-		slog.ErrorContext(ctx, "Unable to store ACME secret",
-			slog.Group("k8s",
-				slog.String("namespace", secret.ObjectMeta.Namespace),
-				slog.String("name", secret.ObjectMeta.Name),
-			))
+		slog.ErrorContext(ctx, "Unable to store secret", attrs)
 		return err
 	}
 
+	slog.InfoContext(ctx, "Secret stored", attrs)
 	return nil
 }
 

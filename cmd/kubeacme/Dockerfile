@@ -18,6 +18,7 @@ RUN go mod download
 COPY --link . .
 
 # Build the binary.
+ENV CGO_ENABLED=0
 RUN go build -o /go/bin/main \
     -ldflags "-s -w -X main.CommitHash=`git rev-parse --short HEAD` -X main.Revision=`git rev-list --count HEAD`" \
     ./cmd/kubeacme && go clean -cache -testcache -fuzzcache
@@ -28,7 +29,7 @@ FROM scratch
 
 # Copy the certificates and binary over.
 COPY --link --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
-COPY --link --from=builder /go/bin/main /go/bin/main
+COPY --link --from=builder /go/bin/main /kubeacme
 
 EXPOSE 8080
-ENTRYPOINT ["/go/bin/main"]
+ENTRYPOINT ["/kubeacme"]

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"log/slog"
 	"net/http"
 	"os"
@@ -45,7 +46,7 @@ func signalHandler(fn func(os.Signal)) {
 }
 
 func main() {
-	ctx := context.Background()
+	flag.Parse()
 
 	// Set up logging.
 	slog.SetDefault(newLogger(
@@ -55,6 +56,18 @@ func main() {
 			slog.String("commit", CommitHash),
 		),
 	))
+
+	ctx := context.Background()
+
+	// If the first argument is "request", we send a SIGHUP to the process
+	// to trigger a certificate refresh.
+	if flag.NArg() != 0 && flag.Arg(0) == "request" {
+		if err := syscall.Kill(1, syscall.SIGHUP); err != nil {
+			slog.ErrorContext(ctx, "Unable to signal for a request", "error", err)
+		}
+
+		return
+	}
 
 	// Set up the kubeacme agent, which will handle the ACME challenges and
 	// store the TLS certificate in a Kubernetes secret.
@@ -84,7 +97,7 @@ func main() {
 		switch sig {
 		// Handle a clean shutdown.
 		case syscall.SIGINT, syscall.SIGTERM:
-			slog.InfoContext(ctx, "Shutting down service")
+			slog.InfoContext(ctx, "Stopping service")
 			_ = server.Shutdown(ctx)
 
 		// Update the certificate.
@@ -109,6 +122,4 @@ func main() {
 		slog.ErrorContext(ctx, "Unable to http.ListenAndServe", "error", err)
 		os.Exit(1)
 	}
-
-	slog.InfoContext(ctx, "Stopping service")
 }
