@@ -28,7 +28,7 @@ jobs:
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
-          file: ./kubeacme/cmd/Dockerfile
+          file: ./cmd/kubeacme/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ vars.DOCKERHUB_USERNAME }}/kubeacme:latest
