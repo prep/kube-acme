@@ -68,21 +68,12 @@ func New(config Config) (*Agent, error) {
 func (a *Agent) storeSecret(ctx context.Context, secret *corev1.Secret) error {
 	secrets := a.client.CoreV1().Secrets(secret.ObjectMeta.Namespace)
 
-	_, err :=
-		secrets.Get(ctx, secret.Name, metav1.GetOptions{})
-	switch {
-	case apierrors.IsNotFound(err):
-		_, err = secrets.Create(ctx, secret, metav1.CreateOptions{})
-	case err != nil:
-	default:
-		_, err = secrets.Update(ctx, secret, metav1.UpdateOptions{})
-	}
-
 	attrs := slog.Group("k8s",
 		slog.String("namespace", secret.ObjectMeta.Namespace),
 		slog.String("name", secret.ObjectMeta.Name),
 	)
 
+	_, err := secrets.Create(ctx, secret, metav1.CreateOptions{})
 	if err != nil {
 		slog.ErrorContext(ctx, "Unable to store secret", attrs)
 		return err

@@ -51,7 +51,7 @@ func main() {
 	// Set up logging.
 	slog.SetDefault(newLogger(
 		slog.Group("app",
-			slog.String("name", "kubeacme"),
+			slog.String("name", "kube-acme"),
 			slog.String("revision", Revision),
 			slog.String("commit", CommitHash),
 		),

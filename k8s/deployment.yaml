@@ -1,0 +1,202 @@
+# The "kube-acme" namespace.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kube-acme
+  labels:
+    name: kube-acme
+
+###############################################################################
+################################## [ Roles ] ##################################
+###############################################################################
+
+---
+# This role allows the kube-acme service account to ONLY create new secrets in
+# the "nginx" namespace. This is used to store new Let's Encrypt certificates.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: nginx-secret-writer
+  namespace: nginx
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+
+---
+# This role allows the kube-acme service account to read and write secrets
+# within its own "kube-acme" namespace. This is used to read and write the
+# Let's Encrypt account key.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kube-acme-secret-manager
+  namespace: kube-acme
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "create", "update"]
+
+---
+# This role allows a service account to manage services in the "nginx"
+# namespace. This is used to update the ingress service with a reference to
+# the new Let's Encrypt certificate.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: nginx-service-manager
+  namespace: nginx
+rules:
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["patch"]
+
+###############################################################################
+############################## [ RoleBindings ] ###############################
+###############################################################################
+
+---
+# Allow the default service account in the "kube-acme" namespace to write
+# secrets in the "nginx" namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kube-acme-nginx-secret-writer
+  namespace: nginx
+subjects:
+  - kind: ServiceAccount
+    name: default
+    namespace: kube-acme
+roleRef:
+  kind: Role
+  name: nginx-secret-writer
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# Allow the default service account in the "kube-acme" namespace to manage
+# secrets in the "kube-acme" namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kube-acme-secret-manager
+  namespace: kube-acme
+subjects:
+  - kind: ServiceAccount
+    name: default
+    namespace: kube-acme
+roleRef:
+  kind: Role
+  name: kube-acme-secret-manager
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# Allow the default service account in the "kube-acme" namespace to manage
+# services in the "nginx" namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kube-acme-nginx-service-manager
+  namespace: nginx
+subjects:
+  - kind: ServiceAccount
+    name: default
+    namespace: kube-acme
+roleRef:
+  kind: Role
+  name: nginx-service-manager
+  apiGroup: rbac.authorization.k8s.io
+
+###############################################################################
+######################### [ Deployment and Service ] ##########################
+###############################################################################
+
+---
+# The deployment for the "kube-acme" application.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kube-acme
+  namespace: kube-acme
+  labels:
+    app: kube-acme
+
+spec:
+  # Always run exactly one replica of the "kube-acme" application, because the
+  # app keeps tokens in memory and doesn't share that state.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kube-acme
+  template:
+    metadata:
+      labels:
+        app: kube-acme
+    spec:
+      containers:
+        - name: kube-acme
+          image: prep/kube-acme:latest
+          ports:
+            - containerPort: 8080
+              protocol: TCP
+          env:
+            - name: KUBEACME_DOMAINS
+              value: "example.com,example.net,example.org"
+            - name: KUBEACME_EMAIL
+              value: "john.smith@example.com"
+            #- name: "KUBEACME_CERT_NAMEPREFIX"
+            #  value: "ssl-cert"
+            #- name: "KUBEACME_CERT_NAMESPACE"
+            #  value: "nginx"
+            #- name: "KUBEACME_SERVICE_NAME"
+            #  value: "nginx-service"
+            #- name: "KUBEACME_SERVICE_NAMESPACE"
+            #  value: "nginx"
+            #- name: "KUBEACME_ACCOUNT_KEY_NAME"
+            #  value: "account-key"
+            #- name: "KUBEACME_ACCOUNT_KEY_NAMESPACE"
+            #  value: "kube-acme"
+
+          # Determine whether the pod is ready to serve traffic. Failure will
+          # remove the pod from the service endpoints.
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 10
+
+          # Determine whether the pod is still working. Failure will cause the
+          # pod to be restarted.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 10
+
+          resources:
+            requests:
+              memory: "4Mi"
+              cpu: "100m" # 0.1 CPU core
+            limits:
+              memory: "12Mi"
+              cpu: "500m" # 0.5 CPU core
+
+---
+# The service to expose the "kube-acme" application.
+apiVersion: v1
+kind: Service
+metadata:
+  name: kube-acme
+  namespace: kube-acme
+  labels:
+    app: kube-acme
+
+spec:
+  type: ClusterIP
+  selector:
+    app: kube-acme
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
