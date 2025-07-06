@@ -41,5 +41,5 @@ jobs:
             REVISION=${{ steps.gitinfo.outputs.REVISION }}
           push: true
           tags: ${{ vars.DOCKERHUB_USERNAME }}/kube-acme:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          #cache-from: type=gha
+          #cache-to: type=gha,mode=max
