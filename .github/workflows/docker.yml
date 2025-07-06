@@ -65,8 +65,3 @@ jobs:
             --amend ${{ vars.DOCKERHUB_USERNAME }}/kube-acme:${{ needs.build.outputs.commit_hash }}-linux-amd64 \
             --amend ${{ vars.DOCKERHUB_USERNAME }}/kube-acme:${{ needs.build.outputs.commit_hash }}-linux-arm64
           docker manifest push ${{ vars.DOCKERHUB_USERNAME }}/kube-acme:latest
-
-      - name: Delete platform-specific images
-        run: |
-          docker rmi ${{ vars.DOCKERHUB_USERNAME }}/kube-acme:${{ needs.build.outputs.commit_hash }}-linux-amd64
-          docker rmi ${{ vars.DOCKERHUB_USERNAME }}/kube-acme:${{ needs.build.outputs.commit_hash }}-linux-arm64
