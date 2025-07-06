@@ -75,11 +75,11 @@ func main() {
 
 		SecretCertNamePrefix: getEnv("KUBEACME_CERT_NAMEPREFIX", "ssl-cert"),
 		SecretCertNamespace:  getEnv("KUBEACME_CERT_NAMESPACE", "nginx"),
-		ServiceName:          getEnv("KUBEACME_SERVICE_NAME", "ingress"),
+		ServiceName:          getEnv("KUBEACME_SERVICE_NAME", "nginx-service"),
 		ServiceNamespace:     getEnv("KUBEACME_SERVICE_NAMESPACE", "nginx"),
 
 		SecretAccountKeyName:      getEnv("KUBEACME_ACCOUNT_KEY_NAME", "account-key"),
-		SecretAccountKeyNamespace: getEnv("KUBEACME_ACCOUNT_KEY_NAMESPACE", "kubeacme"),
+		SecretAccountKeyNamespace: getEnv("KUBEACME_ACCOUNT_KEY_NAMESPACE", "kube-acme"),
 	}
 
 	// Set up the kubeacme agent, which will handle the ACME challenges and

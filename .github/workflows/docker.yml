@@ -12,8 +12,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -27,11 +25,20 @@ jobs:
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      - name: Get metadata
+        id: gitinfo
+        run: |
+          echo "COMMIT_HASH=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "REVISION=$(git rev-list --count HEAD)" >> "$GITHUB_OUTPUT
+
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
           file: ./cmd/kubeacme/Dockerfile
           platforms: linux/amd64,linux/arm64
+          build-args: |
+            COMMIT_HASH=${{ steps.gitinfo.outputs.COMMIT_HASH }}
+            REVISION=${{ steps.gitinfo.outputs.REVISION }}
           push: true
           tags: ${{ vars.DOCKERHUB_USERNAME }}/kube-acme:latest
           cache-from: type=gha

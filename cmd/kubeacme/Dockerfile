@@ -3,6 +3,9 @@ FROM golang:alpine AS builder
 ARG BASE="github.com/prep"
 ARG MODULE="$BASE/kubeacme"
 
+ARG COMMIT_HASH="unknown"
+ARG REVISION="0"
+
 WORKDIR $GOPATH/src/$MODULE
 
 # Install the required tools.
@@ -20,7 +23,7 @@ COPY --link . .
 # Build the binary.
 ENV CGO_ENABLED=0
 RUN go build -o /go/bin/main \
-    -ldflags "-s -w -X main.CommitHash=`git rev-parse --short HEAD` -X main.Revision=`git rev-list --count HEAD`" \
+    -ldflags "-s -w -X main.CommitHash=${COMMIT_HASH} -X main.Revision=${REVISION}" \
     ./cmd/kubeacme && go clean -cache -testcache -fuzzcache
 
 ###############################################################################
