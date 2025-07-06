@@ -15,7 +15,7 @@ This service can be used in a couple different configurations but they all requi
 To install `kube-acme` in your cluster, download the [deployment.yaml](k8s/deployment.yaml) and edit the environment variables. The commented out ones are optional and will have their default values.
 
 ```shell
-curl -O https://github.com/prep/kubeacme/blob/k8s/deployment.yaml
+curl -O https://github.com/prep/kube-acme/blob/k8s/deployment.yaml
 ```
 
 
@@ -55,10 +55,10 @@ kubectl -n nginx rollout restart deploy nginx
 ```
 
 ### Requesting a new certificate
-To request `kubeacme` to create or update the certificate, send the following request to the running pod:
+To request `kube-acme` to create or update the certificate, send the following request to the running pod:
 
 ```shell
-kubectl -n kube-acme exec kube-acme-<rest of pod ID> -- /kubeacme request
+kubectl exec -n kube-acme $(kubectl get pod -n kube-acme -l app=kube-acme -o jsonpath='{.items[0].metadata.name}') -- /kubeacme request
 ```
 
 Observe the logs of the pod to see what's happening. Ideally, this should be done automatically but it doesn't at the moment.
