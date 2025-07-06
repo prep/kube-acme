@@ -11,6 +11,8 @@ type Config struct {
 
 	// ServiceName and ServiceNamespace refer to the k8s service whose annotations
 	// need updating after a new certificate secret has been stored.
+	//
+	// If one of these is empty, the service will not be updated.
 	ServiceName      string
 	ServiceNamespace string
 

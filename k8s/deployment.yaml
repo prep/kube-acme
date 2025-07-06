@@ -135,6 +135,7 @@ spec:
       containers:
         - name: kube-acme
           image: prep/kube-acme:latest
+          imagePullPolicy: Always
           ports:
             - containerPort: 8080
               protocol: TCP
@@ -147,6 +148,7 @@ spec:
             #  value: "ssl-cert"
             #- name: "KUBEACME_CERT_NAMESPACE"
             #  value: "nginx"
+            #  Set KUBEACME_SERVICE_NAME to empty to disable the OKE service update.
             #- name: "KUBEACME_SERVICE_NAME"
             #  value: "nginx-service"
             #- name: "KUBEACME_SERVICE_NAMESPACE"

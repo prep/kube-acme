@@ -64,6 +64,12 @@ func New(config Config) (*Agent, error) {
 	}, nil
 }
 
+// skipUpdateService checks if the service should be updated with the new TLS
+// certificate secret name.
+func (a *Agent) skipUpdateService() bool {
+	return a.config.ServiceName == "" || a.config.ServiceNamespace == ""
+}
+
 // storeSecret stores a Kubernetes secret.
 func (a *Agent) storeSecret(ctx context.Context, secret *corev1.Secret) error {
 	secrets := a.client.CoreV1().Secrets(secret.ObjectMeta.Namespace)
@@ -404,8 +410,10 @@ func (a *Agent) Request(ctx context.Context) (string, error) {
 	}
 
 	// Update the service with a reference to the new TLS certificate secret.
-	if err = a.updateService(ctx, name); err != nil {
-		return "", fmt.Errorf("updateService: %w", err)
+	if !a.skipUpdateService() {
+		if err = a.updateService(ctx, name); err != nil {
+			return "", fmt.Errorf("updateService: %w", err)
+		}
 	}
 
 	return name, nil
